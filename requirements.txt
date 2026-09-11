@@ -1,0 +1,4 @@
+aiogram>=3.13
+aiohttp>=3.9
+gspread>=6.1
+openai>=1.40
