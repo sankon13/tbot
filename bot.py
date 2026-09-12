@@ -36,6 +36,10 @@ class TBot:
         self.bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
         self.dp = Dispatcher()
         self.sheets = Sheets()
+        self.users = dict(config.USERS)
+        self.users.update(self.sheets.load_users())
+        self.pending: dict[int, dict] = {}   # ждущие решения заявки
+        self.denied: set[int] = set()        # отклонённые (до перезапуска бота)
         self._register()
 
     def _register(self):
@@ -44,6 +48,7 @@ class TBot:
         self.dp.callback_query(F.data.startswith("obj:"))(self.on_object_pick)
         self.dp.callback_query(F.data.startswith("edit:"))(self.on_edit_pick)
         self.dp.callback_query(F.data.startswith("voice:"))(self.on_voice_confirm)
+        self.dp.callback_query(F.data.startswith("acc:"))(self.on_access_decision)
         self.dp.message(F.voice)(self.on_voice)
         self.dp.message()(self.on_message)
 
@@ -128,11 +133,64 @@ class TBot:
         await self.apply_edit(q.from_user.id, q.message.answer, int(q.data[5:]),
                               d["changes"], d["by_row"])
 
+    # ---------- доступ ----------
+    async def check_access(self, m: Message) -> bool:
+        """True — доступ есть; False — обработка не нужна (заявка отправлена/отказ)."""
+        uid = m.from_user.id
+        if uid in self.users:
+            return True
+        if uid in self.denied:
+            await m.answer("Доступ не одобрен. Обратитесь к Александру.")
+            return False
+        if uid in self.pending:
+            await m.answer("Заявка уже отправлена Александру, ждите решения.")
+            return False
+        u = m.from_user
+        who = u.full_name + (f" (@{u.username})" if u.username else "")
+        self.pending[uid] = {"name": u.full_name}
+        for aid in config.ADMIN_IDS:
+            try:
+                await self.bot.send_message(
+                    aid,
+                    f"🔔 Новый пользователь просит доступ к боту:\n{who}\nID: `{uid}`\n\nОткрыть доступ?",
+                    reply_markup=kb([("✅ Да, открыть", f"acc:{uid}:yes"), ("❌ Нет", f"acc:{uid}:no")]),
+                )
+            except Exception:
+                logging.exception("не удалось отправить заявку админу %s", aid)
+        await m.answer("У вас пока нет доступа 🙁 Заявка отправлена Александру — как одобрит, бот вам ответит.")
+        return False
+
+    async def on_access_decision(self, q: CallbackQuery):
+        await q.answer()
+        try:
+            _, uid_s, dec = q.data.split(":")
+            uid = int(uid_s)
+        except ValueError:
+            return
+        p = self.pending.pop(uid, None)
+        if p is None:
+            await q.message.edit_text("Заявка уже обработана.")
+            return
+        name = p.get("name") or f"Пользователь {uid}"
+        if dec == "yes":
+            self.sheets.add_user(uid, name)
+            self.users[uid] = name
+            await q.message.edit_text(f"✅ Доступ открыт: {name} ({uid}).")
+            try:
+                await self.bot.send_message(uid, "✅ Александр открыл вам доступ! Теперь пишите расходы и задачи — как текстом, так и голосом.")
+            except Exception:
+                pass
+        else:
+            self.denied.add(uid)
+            await q.message.edit_text(f"❌ Отклонено: {name} ({uid}).")
+            try:
+                await self.bot.send_message(uid, "❌ В доступе отказано.")
+            except Exception:
+                pass
+
     # ---------- голосовые ----------
     async def on_voice(self, m: Message):
-        uid = m.from_user.id
-        if uid not in config.USERS:
-            await m.answer("Нет доступа. Сообщите свой ID администратору: " f"`{uid}`")
+        if not await self.check_access(m):
             return
         note = await m.answer("🎤 Расшифровываю…")
         buf = BytesIO()
@@ -164,19 +222,19 @@ class TBot:
         text = d.get("text", "")
         dialogs.pop(q.from_user.id, None)
         await q.message.edit_text(f"🎤 Принято: «{text}»")
-        await self.process_text(q.from_user.id, config.USERS.get(q.from_user.id, "?"),
+        await self.process_text(q.from_user.id,
+                                self.users.get(q.from_user.id, config.USERS.get(q.from_user.id, "?")),
                                 text, q.message.answer)
 
     # ---------- основная обработка ----------
     async def on_message(self, m: Message):
-        uid = m.from_user.id
-        if uid not in config.USERS:
-            await m.answer("Нет доступа. Сообщите свой ID администратору: " f"`{uid}`")
+        if not await self.check_access(m):
             return
+        uid = m.from_user.id
         text = (m.text or "").strip()
         if not text:
             return
-        await self.process_text(uid, config.USERS[uid], text, m.answer)
+        await self.process_text(uid, self.users.get(uid, config.USERS.get(uid, "?")), text, m.answer)
 
     async def process_text(self, uid, author, text, send):
         # пользователь прислал новое сообщение вместо нажатия кнопки — расшифровка отменяется

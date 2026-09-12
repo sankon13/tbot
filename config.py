@@ -28,3 +28,6 @@ for pair in os.environ.get("USERS", "").split(","):
     if ":" in pair:
         tid, name = pair.split(":", 1)
         USERS[int(tid)] = name
+
+ADMIN_IDS = [int(x) for x in globals().get("ADMIN_IDS", [])]
+ADMIN_IDS += [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]

@@ -49,6 +49,17 @@ class Sheets:
     def _ws(self, title):
         return self.sh.worksheet(title)
 
+    # ---------- пользователи ----------
+    def load_users(self) -> dict[int, str]:
+        users = {}
+        for r in self._ws("Пользователи").get_all_values()[1:]:
+            if len(r) >= 2 and str(r[1]).strip().isdigit():
+                users[int(str(r[1]).strip())] = str(r[0]).strip()
+        return users
+
+    def add_user(self, uid: int, name: str):
+        self._ws("Пользователи").append_row([name, uid])
+
     # ---------- объекты ----------
     def objects(self) -> list[str]:
         return [r[0] for r in self._ws("Объекты").get_all_values()[1:] if r and r[0]]
