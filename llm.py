@@ -3,6 +3,7 @@
 import json
 import re
 
+import httpx
 from openai import OpenAI
 
 import config
@@ -108,6 +109,19 @@ def guess_category(description: str, object_name: str | None,
         temperature=0,
     )
     return resp.choices[0].message.content.strip().strip('"').strip(".")
+
+
+def transcribe(audio: bytes, filename: str = "voice.ogg") -> str:
+    """Расшифровка голосового (GLM-ASR). Возвращает текст."""
+    r = httpx.post(
+        "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+        headers={"Authorization": f"Bearer {config.GLM_API_KEY}"},
+        files={"file": (filename, audio, "audio/ogg")},
+        data={"model": "glm-asr-2512"},
+        timeout=120,
+    )
+    r.raise_for_status()
+    return (r.json().get("text") or "").strip()
 
 
 def match_person(text: str) -> str | None:

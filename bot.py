@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from io import BytesIO
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
@@ -42,6 +43,8 @@ class TBot:
         self.dp.message(Command("tasks"))(self.cmd_tasks)
         self.dp.callback_query(F.data.startswith("obj:"))(self.on_object_pick)
         self.dp.callback_query(F.data.startswith("edit:"))(self.on_edit_pick)
+        self.dp.callback_query(F.data.startswith("voice:"))(self.on_voice_confirm)
+        self.dp.message(F.voice)(self.on_voice)
         self.dp.message()(self.on_message)
 
     async def run(self):
@@ -125,23 +128,73 @@ class TBot:
         await self.apply_edit(q.from_user.id, q.message.answer, int(q.data[5:]),
                               d["changes"], d["by_row"])
 
+    # ---------- голосовые ----------
+    async def on_voice(self, m: Message):
+        uid = m.from_user.id
+        if uid not in config.USERS:
+            await m.answer("Нет доступа. Сообщите свой ID администратору: " f"`{uid}`")
+            return
+        note = await m.answer("🎤 Расшифровываю…")
+        buf = BytesIO()
+        await self.bot.download(m.voice, destination=buf)
+        try:
+            text = llm.transcribe(buf.getvalue(), m.voice.file_name or "voice.ogg")
+        except Exception as e:
+            logging.exception("transcribe failed")
+            text = ""
+        if not text:
+            await note.edit_text("Не удалось расшифровать голосовое 🙁 Продиктуйте ещё раз или напишите текстом.")
+            return
+        dialogs[uid] = {"expect": "voice_confirm", "text": text}
+        await note.edit_text(
+            f"🎤 Распознал:\n«{text}»\n\nПродолжить?",
+            reply_markup=kb([("✅ Да, продолжить", "voice:yes"), ("❌ Нет, отмена", "voice:no")]),
+        )
+
+    async def on_voice_confirm(self, q: CallbackQuery):
+        await q.answer()
+        d = dialogs.get(q.from_user.id)
+        if not d or d.get("expect") != "voice_confirm":
+            await q.message.edit_text("Расшифровка уже обработана — отправьте голосовое заново.")
+            return
+        if q.data == "voice:no":
+            dialogs.pop(q.from_user.id, None)
+            await q.message.edit_text("❌ Отменено. Продиктуйте заново или напишите текстом.")
+            return
+        text = d.get("text", "")
+        dialogs.pop(q.from_user.id, None)
+        await q.message.edit_text(f"🎤 Принято: «{text}»")
+        await self.process_text(q.from_user.id, config.USERS.get(q.from_user.id, "?"),
+                                text, q.message.answer)
+
     # ---------- основная обработка ----------
     async def on_message(self, m: Message):
         uid = m.from_user.id
         if uid not in config.USERS:
             await m.answer("Нет доступа. Сообщите свой ID администратору: " f"`{uid}`")
             return
-        author = config.USERS[uid]
         text = (m.text or "").strip()
         if not text:
             return
+        await self.process_text(uid, config.USERS[uid], text, m.answer)
+
+    async def process_text(self, uid, author, text, send):
+        # пользователь прислал новое сообщение вместо нажатия кнопки — расшифровка отменяется
+        if dialogs.get(uid, {}).get("expect") == "voice_confirm":
+            dialogs.pop(uid, None)
 
         d = dialogs.get(uid)
         if d and d.get("expect") == "object_new":  # ждём название нового объекта
-            d["draft"]["object"] = self.sheets.add_object(text)
+            check = llm.extract(text, "бот спросил у пользователя: как называется новый объект?")
+            if check.get("action") in ("answer", "none"):
+                # это действительно название — спрашивать больше не надо, пользователь уже подтвердил «Новый объект»
+                d["draft"]["object"] = self.sheets.add_object(text)
+                dialogs.pop(uid, None)
+                await self.finish_or_ask(uid, send, author=author, final=True)
+                return
+            # пользователь начал другой диалог — новый объект НЕ добавляем, обрабатываем сообщение заново
             dialogs.pop(uid, None)
-            await self.finish_or_ask(uid, m.answer, author=author, final=True)
-            return
+            d = None
 
         ctx = None
         if d and d.get("expect"):
@@ -153,7 +206,7 @@ class TBot:
         # если ждём ответ и LLM считает это ответом — подставляем
         if d and d.get("expect") and action in ("answer", "none", "expense", "task"):
             if action == "answer" or (action in ("expense", "task") and d.get("expect")):
-                return await self.apply_answer(uid, author, data.get("value") or text, m.answer)
+                return await self.apply_answer(uid, author, data.get("value") or text, send)
 
         if action == "expense":
             dialogs.pop(uid, None)
@@ -162,7 +215,7 @@ class TBot:
                 "amount": data.get("amount"), "object": data.get("object"),
                 "description": data.get("description") or text,
             }}
-            await self.process_expense(uid, m.answer)
+            await self.process_expense(uid, send)
         elif action == "task":
             dialogs.pop(uid, None)
             dialogs[uid] = {"expect": None, "draft": {
@@ -170,18 +223,18 @@ class TBot:
                 "assignee": data.get("assignee"), "description": data.get("description") or text,
                 "deadline": data.get("deadline"),
             }}
-            await self.process_task(uid, m.answer)
+            await self.process_task(uid, send)
         elif action == "task_done":
             ok = self.sheets.close_task(int(data.get("task_number") or 0))
-            await m.answer("Закрыл ✅" if ok else "Не нашёл такую задачу.")
+            await send("Закрыл ✅" if ok else "Не нашёл такую задачу.")
         elif action == "edit":
             find = data.get("find") or {}
             changes = data.get("changes") or {}
-            await self.do_edit(uid, m.answer, find, changes)
+            await self.do_edit(uid, send, find, changes)
         elif action == "report":
-            await self.report(m.answer)
+            await self.report(send)
         else:
-            await m.answer("Не понял, это расход или задача? Уточни, пожалуйста.")
+            await send("Не понял, это расход или задача? Уточни, пожалуйста.")
 
     # ---------- расход ----------
     async def process_expense(self, uid, send):
