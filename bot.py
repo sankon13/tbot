@@ -215,7 +215,7 @@ class TBot:
         buf = BytesIO()
         await self.bot.download(m.voice, destination=buf)
         try:
-            text = llm.transcribe(buf.getvalue(), m.voice.file_name or "voice.ogg")
+            text = llm.transcribe(buf.getvalue(), getattr(m.voice, "file_name", None) or "voice.ogg")
         except Exception as e:
             logging.exception("transcribe failed")
             text = ""
@@ -311,7 +311,8 @@ class TBot:
         elif action == "report":
             await self.report(send)
         else:
-            await send("Не понял, это расход или задача? Уточни, пожалуйста.")
+            # не расход, не задача, не команда — просто общаемся
+            await send(llm.chat(author, text))
 
     # ---------- расход ----------
     async def process_expense(self, uid, send):

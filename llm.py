@@ -111,6 +111,28 @@ def guess_category(description: str, object_name: str | None,
     return resp.choices[0].message.content.strip().strip('"').strip(".")
 
 
+CHAT_SYSTEM = """Ты — дружелюбный ассистент внутри Telegram-бота, через который Александр и Сергей ведут учёт бизнеса:
+записывают расходы и задачи (те сразу попадают в Google Таблицу), голосом и текстом.
+Правила:
+- Отвечай по-русски, кратко и по делу (1–4 предложения), живым тоном, можно лёгкий юмор.
+- Ты не записал что-то в таблицу — так и скажи, если спросит.
+- Если сообщение похоже на расход или задачу, но ты не уверен, что оно уже записано, — подскажи, как записать: просто написать «потратил…» или «задача…».
+- Общие вопросы (приветствия, «как дела», советы, пояснения по учёту) — отвечай сам, понятно и полезно."""
+
+
+def chat(user_name: str, text: str) -> str:
+    """Свободное общение для сообщений, не являющихся расходом/задачей/командой."""
+    resp = client.chat.completions.create(
+        model=config.GLM_MODEL,
+        messages=[
+            {"role": "system", "content": CHAT_SYSTEM},
+            {"role": "user", "content": f"{user_name} пишет: {text}"},
+        ],
+        temperature=0.6,
+    )
+    return resp.choices[0].message.content.strip()
+
+
 def transcribe(audio: bytes, filename: str = "voice.ogg") -> str:
     """Расшифровка голосового (GLM-ASR). Возвращает текст."""
     r = httpx.post(
