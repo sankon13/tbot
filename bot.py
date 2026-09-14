@@ -27,11 +27,11 @@ logging.basicConfig(level=logging.INFO)
 dialogs: dict[int, dict] = {}
 
 
-def kb(buttons: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+def kb(buttons: list[tuple[str, str]], cols: int = 1) -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     for text, data in buttons:
         b.button(text=text, callback_data=data)
-    b.adjust(1)
+    b.adjust(cols)
     return b.as_markup()
 
 
