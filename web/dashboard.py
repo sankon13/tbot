@@ -51,7 +51,8 @@ def _req_view(row: list) -> dict:
 
 @web.middleware
 async def auth_middleware(request, handler):
-    if request.path == "/login":
+    # /notify защищён собственным параметром pass, /health открыт для пингов
+    if request.path in ("/login", "/notify", "/health", "/tgwebhook"):
         return await handler(request)
     cookie = request.cookies.get(AUTH_COOKIE, "")
     if hmac.compare_digest(cookie, _auth_token()):
