@@ -73,6 +73,25 @@ class TBot:
         app = web.Application()
         dashboard.add_routes(app, self.zs)
         app.router.add_get("/health", lambda r: web.Response(text="TBot is alive"))
+
+        async def notify(request):
+            # ops-канал: предупреждения в Telegram админам через сервер бота
+            # (когда api.telegram.org недоступен с ПК пользователя — например, выключен VPN)
+            if request.query.get("pass") != config.DASHBOARD_PASSWORD:
+                return web.Response(status=403)
+            text = request.query.get("text", "").strip()[:4000]
+            if not text:
+                return web.Response(text="no text")
+            sent = 0
+            for aid in config.ADMIN_IDS:
+                try:
+                    await self.bot.send_message(aid, f"⚠️ {text}")
+                    sent += 1
+                except Exception:
+                    logging.exception("notify -> %s failed", aid)
+            return web.Response(text=f"sent:{sent}")
+
+        app.router.add_get("/notify", notify)
         if config.WEBHOOK_URL:
             app.router.add_post(config.WEBHOOK_PATH, self.handle_update)
             await self.bot.set_webhook(
