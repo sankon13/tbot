@@ -35,7 +35,7 @@ class ZakupSheets:
             w.insert_row(headers, 1)
             w.format("1:1", {"textFormat": {"bold": True}})
         try:
-            self.sh.worksheet("Лист1").delete()  # дефолтный пустой лист
+            self.sh.del_worksheet(self.sh.worksheet("Лист1"))  # дефолтный пустой лист
         except Exception:
             pass
 
