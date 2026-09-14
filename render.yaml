@@ -12,6 +12,14 @@ services:
         sync: false
       - key: SPREADSHEET_ID
         sync: false
+      - key: ZAKUP_SPREADSHEET_ID
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: YANDEX_SEARCH_API_KEY
+        sync: false
+      - key: YANDEX_FOLDER_ID
+        sync: false
       - key: USERS
         sync: false
       - key: GOOGLE_CREDENTIALS

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Запросы — ZAKUP{% endblock %}
+{% block content %}
+<h1>Запросы ({{ items|length }})</h1>
+{% for r in items %}
+<div class="card">
+  <div><b>№{{ r.no }}</b> · <span class="muted">{{ r.date }}</span> · <span class="badge {{ r.cls }}">{{ r.status }}</span></div>
+  <div style="margin:6px 0">{{ r.text }}</div>
+  <div class="muted">{{ r.author }} · {{ r.sources }} · найдено: {{ r.found }}</div>
+  <a class="btn" href="/request/{{ r.no }}">Открыть</a>
+</div>
+{% else %}
+<p>Запросов пока нет. Напиши запрос боту в Telegram.</p>
+{% endfor %}
+{% endblock %}

@@ -15,7 +15,11 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
 import llm
+from searchers import glm_web, yandex
+from searchers.base import SOURCES
 from sheets import Sheets
+from web import dashboard
+from zakup_sheets import ZakupSheets
 
 logging.basicConfig(level=logging.INFO)
 
@@ -36,8 +40,11 @@ class TBot:
         self.bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
         self.dp = Dispatcher()
         self.sheets = Sheets()
+        self.zs = ZakupSheets()
+        self.zs.ensure_structure()
         self.users = dict(config.USERS)
         self.users.update(self.sheets.load_users())
+        self.users.update(self.zs.load_users())  # доступ общий: учёт + поиск
         self.pending: dict[int, dict] = {}   # ждущие решения заявки
         self.denied: set[int] = set()        # отклонённые (до перезапуска бота)
         self._register()
@@ -45,10 +52,12 @@ class TBot:
     def _register(self):
         self.dp.message(Command("start"))(self.cmd_start)
         self.dp.message(Command("tasks"))(self.cmd_tasks)
+        self.dp.message(Command("zaprosy", "requests", "запросы"))(self.cmd_zaprosy)
         self.dp.callback_query(F.data.startswith("obj:"))(self.on_object_pick)
         self.dp.callback_query(F.data.startswith("edit:"))(self.on_edit_pick)
         self.dp.callback_query(F.data.startswith("voice:"))(self.on_voice_confirm)
         self.dp.callback_query(F.data.startswith("acc:"))(self.on_access_decision)
+        self.dp.callback_query(F.data.startswith("go:"))(self.on_go)
         self.dp.message(F.voice)(self.on_voice)
         self.dp.message()(self.on_message)
 
@@ -62,7 +71,8 @@ class TBot:
 
     async def run(self):
         app = web.Application()
-        app.router.add_get("/", lambda r: web.Response(text="TBot is alive"))
+        dashboard.add_routes(app, self.zs)
+        app.router.add_get("/health", lambda r: web.Response(text="TBot is alive"))
         if config.WEBHOOK_URL:
             app.router.add_post(config.WEBHOOK_PATH, self.handle_update)
             await self.bot.set_webhook(
@@ -86,10 +96,14 @@ class TBot:
     async def cmd_start(self, m: Message):
         await m.answer(
             f"Привет, {config.USERS.get(m.from_user.id, m.from_user.first_name)}! "
-            "Пиши расход («потратил 5000 на материалы для Садовой») "
-            "или задачу («Серёге позвонить поставщику до пятницы»). "
-            "Чего не хватит — спрошу. /tasks — открытые задачи."
-        )
+            "Я умею три вещи:\n"
+            "1. УЧЁТ — пиши расход («потратил 5000 на материалы для Садовой») или задачу "
+            "(«Серёге позвонить поставщику до пятницы»), можно голосом. /tasks — открытые задачи.\n"
+            "2. ПОИСК ПОСТАВЩИКОВ — напиши, кого найти: «найди исполнителей по стяжке пола в Казани», "
+            "«где купить облицовочный кирпич». Предложу где искать (Авито, Яндекс Услуги, весь интернет) "
+            "и пришлю список со ссылками. /zaprosy — последние запросы и статусы, "
+            "веб-страница со всеми запросами — по паролю.\n"
+            "Чего не хватит — спрошу.")
 
     async def cmd_tasks(self, m: Message):
         tasks = self.sheets.open_tasks()
@@ -98,6 +112,17 @@ class TBot:
             return
         lines = [f"№{r[0]} · {r[4]} · {r[5]}" + (f" · до {r[6]}" if r[6] else "") + f" · {r[7]}" for r in tasks]
         await m.answer("Открытые задачи:\n" + "\n".join(lines))
+
+    async def cmd_zaprosy(self, m: Message):
+        rows = [r for r in self.zs.all_requests() if r and r[0].strip()][-10:]
+        if not rows:
+            await m.answer("Поисковых запросов пока нет. Напиши, кого найти — например "
+                           "«найди бригаду по стяжке пола в Казани».")
+            return
+        lines = [f"№{r[0]} · {r[1]} · {r[8] if len(r) > 8 else '?'} · {r[3][:60]}"
+                 f" ({r[7] if len(r) > 7 else '?'}{', ' + r[9] + ' шт' if len(r) > 9 and r[9] not in ('', '0') else ''})"
+                 for r in rows]
+        await m.answer("Последние поисковые запросы:\n" + "\n".join(reversed(lines)))
 
     # ---------- выбор объекта кнопками ----------
     async def on_object_pick(self, q: CallbackQuery):
@@ -260,6 +285,14 @@ class TBot:
         if dialogs.get(uid, {}).get("expect") == "voice_confirm":
             dialogs.pop(uid, None)
 
+        # открытый поиск (ждём кнопку источника): новый текст — либо новый поисковый
+        # запрос (перезапуск брифа), либо обычное сообщение — обрабатываем ниже
+        if dialogs.get(uid, {}).get("expect") == "brief":
+            check = llm.extract(text, "бот показал бриф поиска и ждёт выбор источника кнопкой или уточнение текстом")
+            if check.get("action") == "search":
+                return await self.start_request(uid, author, text, send)
+            dialogs.pop(uid, None)
+
         d = dialogs.get(uid)
         if d and d.get("expect") == "object_new":  # ждём название нового объекта
             check = llm.extract(text, "бот спросил у пользователя: как называется новый объект?")
@@ -310,6 +343,8 @@ class TBot:
             await self.do_edit(uid, send, find, changes)
         elif action == "report":
             await self.report(send)
+        elif action == "search":
+            await self.start_request(uid, author, text, send)
         else:
             # не расход, не задача, не команда — просто общаемся
             await send(llm.chat(author, text))
@@ -409,6 +444,112 @@ class TBot:
         text = "\n".join(" | ".join(str(c) for c in r) for r in expenses)
         await send(llm.summarize("Сделай краткую сводку расходов в виде маркированного списка, "
                                  "итог по суммам в конце:\n" + text))
+
+    # ---------- поиск поставщиков (ZAKUP) ----------
+    async def start_request(self, uid: int, author: str, text: str, send):
+        """Текст поискового запроса -> бриф + выбор источника."""
+        brief = await asyncio.to_thread(llm.parse_request, text)
+        if brief.get("chat"):
+            dialogs.pop(uid, None)
+            return await send(llm.chat(text))
+        dialogs[uid] = {"expect": "brief", "draft": {"text": text, "author": author, "brief": brief}}
+        city = brief.get("city") or "—"
+        volume = brief.get("volume") or "—"
+        if brief.get("source"):
+            buttons = [(f"✅ Искать: {SOURCES[brief['source']]}", f"go:{brief['source']}"),
+                       ("🌐 Весь интернет", "go:web"),
+                       ("❌ Отмена", "go:cancel")]
+        else:
+            buttons = [("Авито", "go:avito"), ("Яндекс Услуги", "go:yandex_uslugi"),
+                       ("🌐 Весь интернет", "go:web"), ("🌍 Все источники", "go:all"),
+                       ("❌ Отмена", "go:cancel")]
+        await send(
+            "🔎 Запрос понят:\n"
+            f"• Что: {brief['what']}\n"
+            f"• Тип: {brief['type']}\n"
+            f"• Город: {city}\n"
+            f"• Объём: {volume}\n\n"
+            "Где искать?",
+            reply_markup=kb(buttons, cols=2))
+
+    async def on_go(self, q: CallbackQuery):
+        await q.answer()
+        uid = q.from_user.id
+        d = dialogs.get(uid)
+        if not d or d.get("expect") != "brief":
+            await q.message.edit_text("Диалог уже закрыт — напишите поисковый запрос заново.")
+            return
+        choice = q.data[3:]
+        if choice == "cancel":
+            dialogs.pop(uid, None)
+            await q.message.edit_text("❌ Отменено. Напишите новый запрос, когда понадобится.")
+            return
+        sources = ["avito", "yandex_uslugi", "web"] if choice == "all" else [choice]
+        labels = " + ".join(SOURCES[s] for s in sources)
+        dialogs.pop(uid, None)
+        draft = d["draft"]
+        await q.message.edit_text(f"🔎 Ищу: {draft['brief']['what']} ({labels})…")
+        result = await asyncio.to_thread(
+            self._search_pipeline, uid, draft, choice, labels, sources)
+        await self._send_results(q.message.edit_text, q.message.answer, *result)
+
+    @staticmethod
+    def search_source(brief: dict, source: str) -> list:
+        """Основной поиск — Yandex Search API; нет ключа или ошибка -> веб-поиск GLM."""
+        try:
+            if yandex.configured():
+                return yandex.search_yandex(brief, source)
+        except Exception:
+            logging.exception("yandex search failed, fallback to GLM")
+        return glm_web.search_web(brief, source)
+
+    def _search_pipeline(self, uid: int, draft: dict, choice: str, labels: str, sources: list[str]):
+        brief = draft["brief"]
+        no = self.zs.add_request(draft["author"], draft["text"], brief, labels)
+        raw = []
+        try:
+            for src in sources:
+                raw.extend(self.search_source(brief, src))
+            ranked = llm.rank_results(brief, raw)
+            final = [(raw[it["i"] - 1], it["name"], it["why"]) for it in ranked]
+            seen, uniq = set(), []  # защитный дедуп по ссылке
+            for sup, name, why in final:
+                key = sup.url.rstrip("/").lower()
+                if key not in seen:
+                    seen.add(key)
+                    uniq.append((sup, name, why))
+            final = uniq
+            self.zs.add_suppliers(no, [sup for sup, _, _ in final])
+            status = "Есть результаты" if final else "Нет результатов"
+            self.zs.update_request(no, status, found=len(final))
+            return no, final, labels, None
+        except Exception as e:
+            logging.exception("search failed")
+            self.zs.update_request(no, "Ошибка", note=str(e))
+            return no, [], labels, str(e)
+
+    async def _send_results(self, edit, send, no: int, final: list, labels: str, error: str | None):
+        if error:
+            await edit(f"⚠️ По запросу №{no} поиск не удался: {error[:200]}.\n"
+                       "Попробуйте ещё раз — или я посмотрю логи.")
+            return
+        if not final:
+            await edit(f"🤷 По запросу №{no} ничего подходящего не нашёл ({labels}).\n"
+                       "Попробуйте переформулировать или выбрать другой источник.")
+            return
+        header = f"✅ Запрос №{no} — нашёл {len(final)} поставщиков ({labels}):\n\n"
+        items = [f"{i}. {name}\n{why}\n{sup.url}" for i, (sup, name, why) in enumerate(final, 1)]
+        chunks, cur = [], header  # склеиваем в сообщения <= 4000 символов
+        for it in items:
+            block = it + "\n\n"
+            if len(cur) + len(block) > 4000:
+                chunks.append(cur)
+                cur = ""
+            cur += block
+        chunks.append(cur)
+        await edit(chunks[0].rstrip())
+        for c in chunks[1:]:
+            await send(c.rstrip())
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Вход — ZAKUP{% endblock %}
+{% block headerlink %}{% endblock %}
+{% block content %}
+<h1>Вход</h1>
+<div class="card">
+<form method="post" action="/login">
+  <input type="password" name="password" placeholder="Пароль" autofocus>
+  <button>Войти</button>
+</form>
+{% if error %}<p style="color:#a11">Неверный пароль</p>{% endif %}
+</div>
+{% endblock %}

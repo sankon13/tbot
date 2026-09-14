@@ -23,6 +23,16 @@ else:
 
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", globals().get("SPREADSHEET_ID", ""))
 
+# Отдельная таблица поиска поставщиков (ZAKUP)
+ZAKUP_SPREADSHEET_ID = os.environ.get("ZAKUP_SPREADSHEET_ID", globals().get("ZAKUP_SPREADSHEET_ID", ""))
+
+# Yandex Search API (основной поиск поставщиков); пробный лимит ~500 запросов/сутки
+YANDEX_SEARCH_API_KEY = os.environ.get("YANDEX_SEARCH_API_KEY", globals().get("YANDEX_SEARCH_API_KEY", ""))
+YANDEX_FOLDER_ID = os.environ.get("YANDEX_FOLDER_ID", globals().get("YANDEX_FOLDER_ID", ""))
+
+# Пароль веб-дашборда поиска (страница со статусами запросов)
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", globals().get("DASHBOARD_PASSWORD", "zakup"))
+
 USERS = globals().get("USERS", {})
 for pair in os.environ.get("USERS", "").split(","):
     if ":" in pair:

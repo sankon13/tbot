@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Запрос №{{ req.no }} — ZAKUP{% endblock %}
+{% block content %}
+<div class="card">
+  <div><b>Запрос №{{ req.no }}</b> · <span class="badge {{ req.cls }}">{{ req.status }}</span></div>
+  <div style="margin:6px 0">{{ req.text }}</div>
+  <div class="muted">{{ req.date }} · {{ req.author }} · {{ req.sources }} · найдено: {{ req.found }}</div>
+  {% if req.note %}<div class="muted">⚠ {{ req.note }}</div>{% endif %}
+</div>
+{% for s in suppliers %}
+<div class="card">
+  <div><b>{{ s.name }}</b></div>
+  <div class="muted">{{ s.source_label }}{% if s.kp_status %} · КП: {{ s.kp_status }}{% endif %}</div>
+  <div style="margin:4px 0">{{ s.description }}</div>
+  <a class="btn" href="{{ s.url }}" target="_blank" rel="noopener">Открыть источник ↗</a>
+</div>
+{% else %}
+<p>Поставщики не найдены.</p>
+{% endfor %}
+<a href="/">← Все запросы</a>
+{% endblock %}
