@@ -43,9 +43,10 @@
 - /tgwebhook и /notify и /health — вне auth-middleware дашборда.
 
 ## 9. Инфраструктурные инварианты
-- Вебхук: url=https://tbot-j0kj.onrender.com/tgwebhook, секрет в заголовке; без WEBHOOK_URL — локальный polling.
+- Вебхук: url=https://tbot-j0kj.onrender.com/tgwebhook, секрет в заголовке; **WEBHOOK_SECRET фиксирован в env — при ротации секрета при рестарте Telegram получает 403 и теряет сообщения**; без WEBHOOK_URL — локальный polling.
 - Сон бесплатного Render: холодный старт до ~60 сек; входящее сообщение будит инстанс.
 - Обновление: git push → POST /v1/services/{id}/deploys → live → getWebhookInfo без ошибок.
+- Env на Render — 13 переменных (см. AGENTS.md «Грабли Render API»).
 
 ## Чек-лист после доработок (минимум)
 1. `python -m py_compile bot.py llm.py sheets.py zakup_sheets.py web/dashboard.py searchers/*.py`
