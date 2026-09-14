@@ -31,3 +31,10 @@ for pair in os.environ.get("USERS", "").split(","):
 
 ADMIN_IDS = [int(x) for x in globals().get("ADMIN_IDS", [])]
 ADMIN_IDS += [int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
+# Webhook (облако): Telegram сам присылает обновления и будит спящий инстанс.
+# Локально (без WEBHOOK_URL) бот работает на long polling как раньше.
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", globals().get("WEBHOOK_URL", ""))
+WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/tgwebhook")
+import secrets as _secrets
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET") or globals().get("WEBHOOK_SECRET") or _secrets.token_hex(16)

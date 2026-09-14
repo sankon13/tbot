@@ -52,16 +52,35 @@ class TBot:
         self.dp.message(F.voice)(self.on_voice)
         self.dp.message()(self.on_message)
 
+    async def handle_update(self, request):
+        from aiogram.types import Update
+        if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != config.WEBHOOK_SECRET:
+            return web.Response(status=403)
+        update = Update.model_validate(await request.json(), context={"bot": self.bot})
+        await self.dp.feed_update(self.bot, update)
+        return web.Response(text="ok")
+
     async def run(self):
-        # health-эндпоинт для бесплатного хостинга (и keep-alive пингов)
         app = web.Application()
         app.router.add_get("/", lambda r: web.Response(text="TBot is alive"))
+        if config.WEBHOOK_URL:
+            app.router.add_post(config.WEBHOOK_PATH, self.handle_update)
+            await self.bot.set_webhook(
+                config.WEBHOOK_URL.rstrip("/") + config.WEBHOOK_PATH,
+                secret_token=config.WEBHOOK_SECRET,
+                allowed_updates=["message", "callback_query"],
+                drop_pending_updates=False,
+            )
+            logging.info("webhook set: %s", config.WEBHOOK_URL)
         runner = web.AppRunner(app)
         await runner.setup()
         port = int(os.environ.get("PORT", 8080))
         await web.TCPSite(runner, "0.0.0.0", port).start()
-        await self.bot.delete_webhook(drop_pending_updates=True)
-        await self.dp.start_polling(self.bot)
+        if not config.WEBHOOK_URL:
+            await self.bot.delete_webhook(drop_pending_updates=True)
+            await self.dp.start_polling(self.bot)
+        else:
+            await asyncio.Event().wait()  # работаем как веб-сервер
 
     # ---------- команды ----------
     async def cmd_start(self, m: Message):
