@@ -1,0 +1,69 @@
+{
+  "_примечание": "Паспорт артефакта по § 14 методологии СТРАТА. Поле с ключом _… — примечание, не данные. Создан 2026-09-15 задачей TB-001-перенос-на-СТРАТУ из docs/FUNCTIONALITY.md (описание) и AGENTS.md (runbook, грабли Render).",
+  "id": "tbot",
+  "parent_task": null,
+  "type": "telegram-bot + web-dashboard",
+  "name": "TBot — бот «Мегастрой»: учёт расходов/задач + поиск поставщиков (ZAKUP)",
+  "canonical_path": "D:/ZCode/Project/TBot",
+  "source_of_truth": "git: github.com/sankon13/tbot, ветка main",
+  "entry_points": ["bot.py", "web/dashboard.py"],
+  "components": [
+    { "path": "bot.py", "role": "точка входа, диалоговый слой (класс TBot), сценарии доступа/расходов/задач/поиска" },
+    { "path": "llm.py", "role": "все вызовы GLM: extract (классификация), transcribe (glm-asr-2512), guess_category, pick_expense_row, match_object, parse_request, rank_results, summarize, chat" },
+    { "path": "sheets.py", "role": "класс Sheets — учётная таблица (Расходы/Задачи/Объекты/Категории/Пользователи)" },
+    { "path": "zakup_sheets.py", "role": "класс ZakupSheets — таблица ZAKUP (Запросы/Поставщики/Пользователи)" },
+    { "path": "searchers/base.py", "role": "dataclass Supplier + словарь SOURCES; стандарт коннектора «бриф → list[Supplier]»" },
+    { "path": "searchers/yandex.py", "role": "основной коннектор: Yandex Search API v2, POST searchapi.api.cloud.yandex.net/v2/web/search, auth Api-Key, ответ XML, site:-оператор (avito.ru / uslugi.yandex.ru)" },
+    { "path": "searchers/glm_web.py", "role": "фолбэк-коннектор: bigmodel web_search (search_pro, search_domain_filter — слаб на ру-интернете)" },
+    { "path": "web/dashboard.py", "role": "aiohttp-дашборд в процессе бота: cookie-авторизация, списки запросов/поставщиков, /health /notify /tgwebhook" },
+    { "path": "web/templates/", "role": "Jinja2-шаблоны дашборда" },
+    { "path": "config.py", "role": "конфиг: читает env + локальные файлы" }
+  ],
+  "invariants": [
+    "у aiogram Voice НЕТ атрибута file_name — всегда getattr(m.voice, 'file_name', None)",
+    "блокирующие операции (search-пайплайн, transcribe) — только через asyncio.to_thread; gspread-вызовы синхронные — приемлемо",
+    "правка строк — поиск по сочетанию ВСЕХ названных признаков (объект И описание И сумма И дата)",
+    "команды /отмена нет — LLM сама понимает из контекста, ответ это или новая запись",
+    "классификатор в приоритете: «купил доски» = expense, «найди где купить доски» = search",
+    "новый объект создаётся ТОЛЬКО после подтверждения кнопкой",
+    "WEBHOOK_SECRET фиксирован в env: ротация → Telegram получает 403 и теряет сообщения",
+    "gspread: удаление листа sh.del_worksheet(ws), НЕ ws.delete()",
+    "сервисный аккаунт Google (SA из service_account.json / GOOGLE_CREDENTIALS) имеет нулевую квоту Drive — таблицы создаёт Александр и расшаривает SA с ролью «Редактор»",
+    "dialog ZAKUP: dialogs[uid] = {\"expect\": \"brief\"}; новый текст при открытом брифе: снова search → перезапуск брифа, иначе обычная обработка"
+  ],
+  "branch_rules": "task/<код-задачи> → merge в main (соло-режим методологии)",
+  "allowed_integration_paths": ["bot.py", "llm.py", "sheets.py", "zakup_sheets.py", "searchers/", "web/", "scripts/", "config.py", "config.example.py", "requirements.txt", "render.yaml", "критерии_приёмки.md", "журнал_решений.md", "артефакты/", "задачи/", "контекстный_роутинг.md", "docs/"],
+  "forbidden_paths": ["config_local.py", "service_account.json", "AGENTS.md (локальный, в .gitignore)", ".venv/", "__pycache__/"],
+  "tests": [
+    "python -m py_compile bot.py llm.py sheets.py zakup_sheets.py config.py web/dashboard.py searchers/*.py",
+    "python scripts/test_search.py — ручной, при изменении searchers/"
+  ],
+  "acceptance_criteria_file": "критерии_приёмки.md",
+  "preview": {
+    "local": "без WEBHOOK_URL бот работает long polling; дашборд — локальный запуск web/dashboard.py",
+    "mock": "нет; проверки на тестовых строках своей таблицы"
+  },
+  "delivery": {
+    "target": "Render free, https://tbot-j0kj.onrender.com, id srv-dai4pcu743jc73dr7uqg, регион frankfurt",
+    "autodeploy": false,
+    "steps": [
+      "git add -A && git commit && git push (автодеплоя НЕТ — сервис создан через API без GitHub-хука)",
+      "POST https://api.render.com/v1/services/srv-dai4pcu743jc73dr7uqg/deploys (Bearer <Render API-ключ, у пользователя>, тело {})",
+      "ждать статус live: GET /v1/services/{id}/deploys",
+      "проверка: GET https://api.telegram.org/bot<token>/getWebhookInfo → url = https://tbot-j0kj.onrender.com/tgwebhook"
+    ],
+    "gotchas": [
+      "PUT /v1/services/{id}/env-vars перезаписывает ВЕСЬ набор — слать полный список из 13 переменных: TELEGRAM_BOT_TOKEN, GLM_API_KEY, GLM_MODEL, SPREADSHEET_ID, ZAKUP_SPREADSHEET_ID, USERS, ADMIN_IDS, GOOGLE_CREDENTIALS, WEBHOOK_URL, WEBHOOK_SECRET (стабильный, не генерировать заново!), DASHBOARD_PASSWORD, YANDEX_SEARCH_API_KEY, YANDEX_FOLDER_ID (GOOGLE_CREDENTIALS — JSON сервисного аккаунта одной строкой)",
+      "create-service: плоские поля (type,name,ownerId,repo,branch,envVars) + serviceDetails{runtime, envSpecificDetails{buildCommand,startCommand}, plan, region}",
+      "логи: GET /v1/logs?ownerId=...&startTime=...&endTime=...&resource={serviceId} (ownerId и время обязательны)",
+      "НЕ проверять бота getUpdates-пробом — 409-конфликт с вебхуком в логах",
+      "сон бесплатного Render: холодный старт до ~60 сек, входящее сообщение будит инстанс"
+    ],
+    "publish_requires": "явная команда Александра (write-gate § 15 первоисточника); агент разработки не деплоит сам"
+  },
+  "smoke": [
+    "GET https://tbot-j0kj.onrender.com/health → «TBot is alive»",
+    "getWebhookInfo: url = .../tgwebhook, last_error_message пуст",
+    "контрольное сообщение боту → ответ в течение ~60 сек (холодный старт)"
+  ]
+}
