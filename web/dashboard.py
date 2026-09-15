@@ -66,7 +66,8 @@ async def login_get(request):
 
 async def login_post(request):
     form = await request.post()
-    if hmac.compare_digest(str(form.get("password", "")), config.DASHBOARD_PASSWORD):
+    sent_password = str(form.get("password", "")).encode("utf-8")
+    if hmac.compare_digest(sent_password, str(config.DASHBOARD_PASSWORD).encode("utf-8")):
         resp = web.HTTPFound("/")
         resp.set_cookie(AUTH_COOKIE, _auth_token(), max_age=60 * 60 * 24 * 30,
                         httponly=True, samesite="Lax")

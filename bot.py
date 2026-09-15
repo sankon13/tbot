@@ -255,12 +255,13 @@ class TBot:
     async def on_voice(self, m: Message):
         if not await self.check_access(m):
             return
+        uid = m.from_user.id
         note = await m.answer("🎤 Расшифровываю…")
         buf = BytesIO()
         await self.bot.download(m.voice, destination=buf)
         try:
             text = llm.transcribe(buf.getvalue(), getattr(m.voice, "file_name", None) or "voice.ogg")
-        except Exception as e:
+        except Exception:
             logging.exception("transcribe failed")
             text = ""
         if not text:
@@ -300,8 +301,8 @@ class TBot:
         await self.process_text(uid, self.users.get(uid, config.USERS.get(uid, "?")), text, m.answer)
 
     async def process_text(self, uid, author, text, send):
-        # пользователь прислал новое сообщение вместо нажатия кнопки — расшифровка отменяется
-        if dialogs.get(uid, {}).get("expect") == "voice_confirm":
+        # пользователь прислал новое сообщение вместо нажатия кнопки — ожидание отменяется
+        if dialogs.get(uid, {}).get("expect") in ("voice_confirm", "edit_pick"):
             dialogs.pop(uid, None)
 
         # открытый поиск (ждём кнопку источника): новый текст — либо новый поисковый
@@ -354,7 +355,11 @@ class TBot:
             }}
             await self.process_task(uid, send)
         elif action == "task_done":
-            ok = self.sheets.close_task(int(data.get("task_number") or 0))
+            try:
+                no = int(data.get("task_number") or 0)
+            except (TypeError, ValueError):
+                no = 0
+            ok = self.sheets.close_task(no)
             await send("Закрыл ✅" if ok else "Не нашёл такую задачу.")
         elif action == "edit":
             find = data.get("find") or {}
@@ -439,7 +444,6 @@ class TBot:
                 return await send("Не понял. Напиши: Александр или Сергей.")
             d["draft"]["assignee"] = who
             dialogs.pop(uid, None)
-            d2 = {"draft": d["draft"]}
             no = self.sheets.add_task(d["draft"]["author"], who,
                                       d["draft"]["description"], d["draft"].get("deadline"))
             await send(f"✅ Задача №{no} для {who}: «{d['draft']['description']}»")
